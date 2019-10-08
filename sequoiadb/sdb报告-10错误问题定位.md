@@ -117,7 +117,7 @@ sysctl -p
 
 同时，即使程序 malloc 了内存，但实际上在 malloc 后，并不会真的立马占用了物理内存，只有当真正开始保存数据时，才会实际使用物理内存。
 
-介绍到这里，读者们可能就对内存申请有所了解了。
+介绍到这里，读者们可能就对内存 malloc 有所了解了。
 
 提问：如果操作系统真的是没有内存了而导致无法创建新的线程，那么如何定位这个问题呢？
 
@@ -133,9 +133,9 @@ cat /proc/meminfo | grep Commit
 * CommitLimit
 * Committed_AS
 
-CommitLimit 参数，是操作系统最大可以申请的内存的大小。
+CommitLimit 参数，是操作系统最大可以 malloc 的内存的大小。
 
-Committed_AS 参数，是操作系统当前已经被申请了的内存的大小。
+Committed_AS 参数，是操作系统当前已经被 malloc 了的内存的大小。
 
 所以简单的总结，就是当 Committed_AS 参数的值无限接近 CommitLimit 参数的值时，证明当前的操作系统，真的没有太多可用内存可以继续给 malloc 了。
 
@@ -177,9 +177,32 @@ CommitLimit = Swap + 物理内存 * (/proc/sys/vm/overcommit_ratio / 100)
 
 在SequoiaDB 的官网介绍中，是建议将该参数设置为 0， 含义是：当剩余的物理内存少于 /proc/sys/vm/min_free_kbytes 参数所设置的值时，才开始真正使用 Swap 交换空间。
 
-所以当真的因为内存资源不足，而导致创建线程失败，可以考虑将 /proc/sys/vm/swappiness 参数适当调大，以更加积极地使用交换空间。
+参照 SequoiaDB 官网内核修改建议
+```
+vm.swappiness = 0
+vm.min_free_kbytes = <物理内存大小的8%，单位KB，最大不超过1GB>
+vm.overcommit_memory = 2
+vm.overcommit_ratio = 85
+```
 
-鲁迅曾经说过：宁可慢一点，也不要失败。（这句话明显就是作者瞎编）
+可以理解为：当真正 free 的物理内存小于 vm.min_free_kbytes 时，才能够开始使用 Swap。但是由于 vm.overcommit_ratio 参数的限制，基本可以判断，真正 free 的物理内存不会小于 vm.min_free_kbytes 参数值。所以按照 SequoiaDB 官网的建议，Swap 空间是不可能被使用的。
+
+读者们读到这里，会产生一个疑问：如果 CommitLimit 数值是包括了 Swap 空间大小，但是 Swap 空间又禁止使用。那么当物理内存真的 OOM 了，Linux 会发生什么呢？
+
+#### Linux 进程冷酷 killer
+Linux 系统也会出现 Out Of Memory （万恶的OOM），这个时候，Linux kernel 就会根据设置，派出“进程冷酷 killer” 来杀进程了。
+
+首先，Linux 的 /proc/sys/vm/panic_on_oom 参数定义了，当出现OOM 时，是否要执行 kill 进程的动作。
+
+/proc/sys/vm/panic_on_oom 参数默认为0，可选值为
+* 0，表示OOM 时，派出 killer 杀进程
+* 1，表示关闭killer 功能，当出现OOM时，Linux 直接进入kernel panic（通俗地讲：死给你看）
+
+kill 进程的策略由 /proc/sys/vm/oom_kill_allocating_task 参数控制，默认值为：0，可选值为
+* 0，哪个进程最坏，就kill 谁
+* 非0，哪个进程触发了 OOM，就kill 谁
+
+至于如何评价哪个进程更坏，评分规则过于复杂，已经超出考试大纲，不再累述。
 
 #### 为啥明明还有 free 内存，为啥依然因为内存不足而导致创建线程失败
 这个问题，在前面各种知识点中其实已经陆陆续续解释了。
@@ -197,15 +220,14 @@ CommitLimit = Swap + 物理内存 * (/proc/sys/vm/overcommit_ratio / 100)
 所以create thread 失败，根本原因不是内存不足，而是无法 malloc 内存了。这两者实际含义完全不同，读者们需要区分清楚的。
 
 # 内核参数调优
-如果用户真的由于内存不足，而导致了无法创建线程错误，可以考虑遵循以下原则进行调优
+如果程序真的发生了无法创建线程错误，可以遵循以下原则进行优化
 
 * 设置 ulimit -n 参数，尽可能调大一点
 * 设置 ulimit -u 参数，尽可能调大一点
 * 设置 ulmit -s 参数，可以考虑适当调小一点
 * 设置 /proc/sys/vm/overcommit_memory 参数，将其设置为 2
-* 设置 /proc/sys/vm/overcommit_ratio 参数，适当调大一点，但是千万不要设置超过 90
+* 设置 /proc/sys/vm/overcommit_ratio 参数，适当调大一点，但是建议不要设置超过 90
 * 为系统配置适当大小的 Swap 交换空间
-* 设置 /proc/sys/vm/swappiness 参数，适当调大一点，但是千万不要设置超过 60
 
 # 其他的知识点
 
