@@ -1,0 +1,14 @@
+stream {
+   upstream cloudsocket {
+      hash $remote_addr consistent;
+      server 192.168.10.211:3309 weight=5 max_fails=3 fail_timeout=30s;
+      server 192.168.10.212:3309 weight=5 max_fails=3 fail_timeout=30s;
+      server 192.168.10.213:3309 weight=5 max_fails=3 fail_timeout=30s;
+   }
+   server {
+      listen 3308;#数据库服务器监听端口
+      proxy_connect_timeout 10s;
+      proxy_timeout 300s;#设置客户端和代理服务之间的超时时间，如果5分钟内没操作将自动断开。
+      proxy_pass cloudsocket;
+   }
+}
